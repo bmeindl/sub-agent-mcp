@@ -1,0 +1,35 @@
+[project]
+name = "sub-agent-mcp"
+version = "0.1.0"
+description = "MCP server that spawns isolated opencode sub-agents in the background. Multi-provider, parallel-safe, with default-deny filesystem access."
+authors = [{ name = "Benjamin Meindl" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.2.0",
+]
+
+[project.scripts]
+sub-agent-mcp = "sub_agent_mcp.server:main"
+
+[project.urls]
+Repository = "https://github.com/bmeindl/sub-agent-mcp"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sub_agent_mcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: tests that spawn real opencode subprocesses (~10-45s each, costs API tokens)",
+]
+addopts = "-m 'not slow'"  # default skips slow tests; run with `pytest -m slow` to include them
