@@ -14,7 +14,7 @@ from mcp.server.fastmcp import FastMCP
 
 from . import results, runner, validators
 
-Tier = Literal["default", "fast", "deep"]
+Tier = Literal["default", "sol", "fable", "kimi"]
 
 
 def _load_env_files() -> None:
@@ -58,8 +58,17 @@ _load_env_files()
 # Two preset timeouts for run_subagent. Default for typical tasks; "long" for
 # bigger research/multi-step. The detached sub-agent is still bounded by the
 # hardcoded kill_at deadline (1800s / 30 min) regardless — see runner.py.
-RUN_SUBAGENT_TIMEOUT_DEFAULT = 120  # 2 min — fits most web-search / single-file tasks
-RUN_SUBAGENT_TIMEOUT_LONG = 600  # 10 min — for bigger research
+#
+# 2026-07-28 (Ben): von 120/600 auf 600/1200 angehoben. Grund: der Rückgabewert
+# bei Timeout ("läuft noch, hol es später ab") wurde in der Praxis NIE abgeholt —
+# der aufrufende Run endete vorher und das fertige Ergebnis verrottete ungelesen
+# in sub-results/ (36 solcher Waisen gezählt). Warten ist das Gewollte: Board-Runs
+# laufen ohnehin 5-10 min und werden erst nach 15 min OHNE offenes Werkzeug als
+# Stillstand gekillt (todo-board/gc_runner.py IDLE_TIMEOUT), Gesamtnotbremse 60 min.
+# Der Timeout bleibt trotzdem als Bremse für einen HÄNGENDEN Sub — er ist die
+# Fehlergrenze, nicht die Normallaufzeit.
+RUN_SUBAGENT_TIMEOUT_DEFAULT = 600  # 10 min — normale Subs dürfen wirklich arbeiten
+RUN_SUBAGENT_TIMEOUT_LONG = 1200  # 20 min — long=True; bleibt unter kill_at (30 min)
 
 mcp = FastMCP("sub-agent")
 
@@ -86,13 +95,16 @@ def spawn_subagent(
     additionally requires EXA_API_KEY in your passthrough_env (tiers.toml);
     when present, OPENCODE_ENABLE_EXA=1 is set automatically.
 
-    MODEL SELECTION — only ever use `tier`. Pick "default" or "fast":
-      - tier="default" → strong general-purpose, near-Opus quality.
-            ~12-22s with tool use. Use this for most work.
-      - tier="fast"    → cheap, snappy, normal quality.
-            ~14-19s. Use when cost matters more than quality.
-      - tier="deep"    → thinking model, SLOW (5-15 min even on trivial inputs).
-            ONLY for genuinely hard reasoning. Auto-enables `long=True`.
+    MODEL SELECTION — only ever use `tier`. Tiers are named after the model
+    they resolve to, because the point of an external sub is WHOSE second
+    opinion you get. The mapping lives in your local `tiers.toml`:
+      - tier="default" → the primary workhorse (same model as one of the named
+            tiers). Use it when you just need work done.
+      - tier="sol"     → OpenAI's flagship. Strong agentic/tool use.
+      - tier="fable"   → a Claude model. The reviewer of choice when the main
+            run is NOT Claude (e.g. a Codex/Sol run that wants a cross-check).
+      - tier="kimi"    → a third voice, neither Anthropic nor OpenAI.
+    Pick a tier for a different MODEL, not for a cheaper one.
 
     Do NOT set `model`. The exact slugs are an implementation detail and
     typos in provider prefixes (silently accepted by opencode's regex check)
@@ -103,7 +115,7 @@ def spawn_subagent(
 
     Args:
         task: The prompt for the sub-agent (required).
-        tier: "default" | "fast" | "deep". Defaults to "default".
+        tier: "default" | "sol" | "fable" | "kimi". Defaults to "default".
         read_dir: Optional. Directory the sub-agent may read.
         write_dir: Optional. Directory the sub-agent may write.
         context_files: Optional. Specific files to attach + grant read access.
@@ -256,13 +268,18 @@ def run_subagent(
     + check_subagent instead.
 
     MODEL SELECTION — use `tier`, not `model`. See spawn_subagent docstring for
-    the three tested tiers ("default" / "fast" / "deep") and why you should
+    the tested tiers ("default" / "sol" / "fable" / "kimi") and why you should
     almost never override via `model`.
 
+    ⚠️ BLOCKING blocks YOU: while this waits, your own turn does nothing else.
+    If you have other work to do meanwhile, use spawn_subagent + check_subagent
+    and interleave. Either way: NEVER finish your turn with a sub-agent still
+    running — its result is written to disk but nobody ever reads it.
+
     Args (same as spawn_subagent, plus):
-        long: if False (default), wait up to 120s.
-              if True, wait up to 600s (10 min). Auto-enabled when tier="deep"
-              (the thinking model needs the headroom).
+        long: if False (default), wait up to 600s (10 min).
+              if True, wait up to 1200s (20 min). Set it explicitly for a
+              genuinely long research/multi-step job.
               On timeout the sub-agent keeps running in the background — you
               can always call check_subagent(task_id) later to collect the result.
 
@@ -271,11 +288,9 @@ def run_subagent(
         On timeout:    status="running", task_id, message — sub-agent is NOT killed,
                        it keeps running detached; poll with check_subagent.
     """
-    # tier="deep" implies long=True — thinking/reasoning models routinely
-    # take 5-15 min even on trivial inputs, so the short timeout would
-    # always fire.
-    if tier == "deep":
-        long = True
+    # Kein Tier setzt `long` mehr automatisch: seit die Tiers Modellnamen tragen
+    # (2026-08-26) ist keines davon ein Minutenlaeufer — die lange Frist ist eine
+    # Eigenschaft der AUFGABE und wird vom Aufrufer gesetzt.
     timeout = RUN_SUBAGENT_TIMEOUT_LONG if long else RUN_SUBAGENT_TIMEOUT_DEFAULT
     spawned = spawn_subagent(
         task=task,
@@ -305,10 +320,13 @@ def run_subagent(
         "task_id": task_id,
         "result": "",
         "message": (
-            f"Sub-agent did not finish within {timeout}s but is still running in "
-            f"the background (will be auto-killed after 30 min total). "
-            f"Call check_subagent('{task_id}') to collect the result when ready — "
-            f"no work is lost."
+            f"Sub-agent did not finish within {timeout}s ({timeout // 60} min) but is "
+            f"still running in the background (auto-killed after 30 min total). "
+            f"This timeout means SOMETHING IS PROBABLY WRONG — a healthy sub of this "
+            f"tier finishes well inside it. Do NOT end your turn here: either poll "
+            f"check_subagent('{task_id}') until it returns done/failed, or — if you "
+            f"give up on it — say so explicitly in your answer and name the task_id, "
+            f"so the result can be collected later instead of rotting in sub-results/."
         ),
         "waited_seconds": timeout,
     }
@@ -321,7 +339,7 @@ def list_models() -> list[dict]:
     Do NOT use this to pick a model for spawn_subagent / run_subagent — most
     listed models are untested through this MCP, broken via adapter quirks, or
     have flaky availability per provider. Use the `tier` parameter instead
-    ("default" | "fast" | "deep"). This tool exists for debugging provider
+    ("default" | "sol" | "fable" | "kimi"). This tool exists for debugging provider
     config and verifying that opencode sees the expected providers.
 
     Returns each as {provider, model, free}. `free` is heuristic: True if the

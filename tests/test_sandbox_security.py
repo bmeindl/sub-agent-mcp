@@ -38,7 +38,7 @@ from sub_agent_mcp import config, results, runner, validators
 # user's tier config instead of hardcoding. Skip cleanly if no tiers
 # configured (e.g. CI without a provider).
 _TIERS = config.get_tiers()
-SECURITY_MODEL = _TIERS.get("fast") or ""    # cheap; tests opencode permissions, not model behavior
+SECURITY_MODEL = _TIERS.get("kimi") or _TIERS.get("default") or ""  # tests opencode permissions, not model behavior
 POSITIVE_MODEL = _TIERS.get("default") or "" # actually uses tools without refusing
 TIMEOUT_SHORT = 45   # sanity, single tool
 TIMEOUT_MED = 60     # combined tool use

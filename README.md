@@ -32,7 +32,7 @@ Both have valid places — pick by whether you want isolation (here) or context 
 ```
    main agent (Claude Code)
        │
-       │  mcp__sub-agent__run_subagent(task, tier="fast", ...)
+       │  mcp__sub-agent__run_subagent(task, tier="fable", ...)
        ▼
    sub-agent-mcp (this repo)
        │  • validate paths against SUBAGENT_{READ,WRITE}_ROOTS
@@ -48,6 +48,8 @@ Both have valid places — pick by whether you want isolation (here) or context 
 ```
 
 Each spawn is independent (parallel-safe). Long jobs can detach: `run_subagent` returns `status: "running"` after a timeout but the job keeps writing; you collect later via `check_subagent(task_id)`.
+
+**Timeouts** (`run_subagent`, seit 2026-07-28): normal **600 s**, mit `long=True` **1200 s**; der detachte Sub wird unabhängig davon nach **1800 s** hart gekillt (`runner.py: DEFAULT_KILL_AFTER_SECONDS`). Der Timeout ist als *Fehler*grenze gedacht, nicht als Normallaufzeit — deshalb großzügig. ⚠️ Es gibt **keinen Callback**: wer seinen Turn beendet, während ein Sub noch läuft, verliert das Ergebnis faktisch (es liegt in `sub-results/`, aber niemand liest es). Auspollen oder die `task_id` explizit weiterreichen.
 
 ## Quick start (60 seconds)
 
@@ -71,7 +73,7 @@ EOF
 #    then restart the client.
 
 # 4. Try it
-#    mcp__sub-agent__run_subagent(task="What's 2+2? One word answer.", tier="fast")
+#    mcp__sub-agent__run_subagent(task="What's 2+2? One word answer.", tier="kimi")
 #    → {"result": "4", "status": "done", ...}
 ```
 
@@ -204,9 +206,15 @@ Three tiers, picked to cover **the only model selections you should normally nee
 
 | `tier` | Intent | When |
 |---|---|---|
-| `"default"` | Strong general-purpose | Most work. Good quality, reasonable speed. |
-| `"fast"` | Cheap & snappy | When cost matters more than quality. |
-| `"deep"` | Thinking/reasoning model | Genuinely hard reasoning. Often SLOW (5-15 min even on trivial inputs). `run_subagent` auto-sets `long=True` for this tier. |
+| `"default"` | The primary workhorse | Most work; also what a call without `tier` gets. |
+| `"sol"` | OpenAI's flagship | Strong agentic/tool work. |
+| `"fable"` | A Claude model | Cross-checking a run that is NOT Claude (e.g. a Codex/Sol run asking for a review). |
+| `"kimi"` | A third voice | Neither Anthropic nor OpenAI — a genuinely independent read. |
+
+Tiers are named after the model they resolve to, not after a price class: the reason to
+spawn an external sub is *whose* second opinion you get. What each name maps to is your
+own `tiers.toml` — the names above are this repo's suggested shape, and the tier keys are
+yours to define. Pick a tier for a different model, not for a cheaper one.
 
 **Stick to these three.** Other models exposed via `list_models()` are untested through this MCP, may be broken via adapter quirks, or have flaky availability per provider. `list_models()` is **diagnostics only** — don't pick from it.
 
@@ -219,7 +227,7 @@ Three tiers, picked to cover **the only model selections you should normally nee
 Spawn a sub-agent and return immediately with a `task_id`. Sub-agent runs detached in the background.
 
 - `task` (required): the prompt
-- `tier`: `"default"` | `"fast"` | `"deep"`. Defaults to `"default"`.
+- `tier`: `"default"` | `"sol"` | `"fable"` | `"kimi"`. Defaults to `"default"`.
 - `read_dir`: absolute path the sub-agent may read recursively (under `SUBAGENT_READ_ROOTS`)
 - `write_dir`: absolute path the sub-agent may write to (under `SUBAGENT_WRITE_ROOTS`)
 - `context_files`: list of absolute file paths attached as context (each under allowed roots)
@@ -229,7 +237,7 @@ Returns `{task_id, result_dir}` or `{error}`.
 
 ### `run_subagent(task, tier?, read_dir?, write_dir?, context_files?, model?, long?)`
 
-Same as `spawn_subagent` but blocks until the sub-agent finishes (or `long`-bounded timeout). On timeout the sub-agent keeps running detached — poll with `check_subagent(task_id)`. `tier="deep"` auto-enables `long=True`.
+Same as `spawn_subagent` but blocks until the sub-agent finishes (or the timeout: 600 s, mit `long=True` 1200 s). Blockiert den *aufrufenden* Agenten — wer nebenher arbeiten will, nimmt `spawn_subagent` + `check_subagent`. On timeout the sub-agent keeps running detached — poll with `check_subagent(task_id)`. Set `long=True` yourself for a genuinely long job.
 
 ### `check_subagent(task_id)`
 
@@ -250,7 +258,7 @@ Returns `[{provider, model, free}]` sorted free-first. Diagnostics only — see 
 **Web-only research (no FS access), cheap tier:**
 ```json
 {"task": "Use web search: latest stable Python version. Return only the version.",
- "tier": "fast"}
+ "tier": "kimi"}
 ```
 
 **With reference document attached, default tier:**
@@ -269,7 +277,7 @@ Returns `[{provider, model, free}]` sorted free-first. Diagnostics only — see 
 **Deep reasoning (slow):**
 ```json
 {"task": "Multi-step regulatory analysis: trace AI Act Art. 50 enforcement implications for synthetic-voice products in DE 2026-2028.",
- "tier": "deep"}
+ "tier": "fable"}
 ```
 
 ## Permission model

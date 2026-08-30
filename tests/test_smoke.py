@@ -45,7 +45,7 @@ def test_smoke_spawn_and_extract(tmp_path, monkeypatch):
     # is now rejected by the allowlist, which is the whole point of the allowlist.
     out = runner.spawn(
         task="Was ist 7 mal 8? Antworte nur mit der Zahl.",
-        tier=os.environ.get("SUBAGENT_TEST_TIER", "fast"),
+        tier=os.environ.get("SUBAGENT_TEST_TIER", "kimi"),
         read_dir=None,
         write_dir=None,
         context_files=None,

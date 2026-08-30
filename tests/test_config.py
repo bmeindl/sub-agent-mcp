@@ -31,11 +31,11 @@ def test_load_config_full(tiers_file: Path):
 
         [tiers]
         default = "p/a"
-        fast    = "p/b"
-        deep    = "p/c"
+        fable   = "p/b"
+        kimi    = "p/c"
     """))
     cfg = config.load_config()
-    assert cfg["tiers"] == {"default": "p/a", "fast": "p/b", "deep": "p/c"}
+    assert cfg["tiers"] == {"default": "p/a", "fable": "p/b", "kimi": "p/c"}
     assert cfg["extra_approved_models"] == ["p/d"]
     assert cfg["passthrough_env"] == ["MY_KEY", "MY_URL"]
 
@@ -46,7 +46,7 @@ def test_get_approved_models_unions_tiers_and_extras(tiers_file: Path):
 
         [tiers]
         default = "p/a"
-        fast    = "p/b"
+        fable   = "p/b"
     """))
     assert config.get_approved_models() == {"p/a", "p/b", "p/c"}
 

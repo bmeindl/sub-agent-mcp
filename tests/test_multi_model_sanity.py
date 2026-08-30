@@ -4,10 +4,9 @@ Catches model-specific regressions like: provider auth broke, model unavailable,
 model refuses to use tools, etc. Does NOT test sandbox boundaries — that's
 test_sandbox_security.py with one fixed model.
 
-Routine = the `default` and `fast` tiers from the user's tiers.toml.
-We skip `deep` because reasoning models routinely take 5-15 min on trivial
-tasks (verify on-demand instead). If no tiers are configured, the whole
-suite skips.
+Routine = every distinct model in the user's tiers.toml (deduplicated — the
+`default` tier usually points at the same model as one of the named tiers).
+If no tiers are configured, the whole suite skips.
 """
 
 from __future__ import annotations
@@ -23,12 +22,12 @@ import pytest
 from sub_agent_mcp import config, results, runner
 
 _TIERS = config.get_tiers()
-ROUTINE_MODELS = [s for s in (_TIERS.get("default"), _TIERS.get("fast")) if s]
+ROUTINE_MODELS = sorted({s for s in _TIERS.values() if s})
 TIMEOUT = 60  # combined task, allow some headroom
 
 pytestmark = pytest.mark.skipif(
     not ROUTINE_MODELS,
-    reason="No default/fast tiers configured in ~/.config/sub-agent-mcp/tiers.toml — see README",
+    reason="No tiers configured in ~/.config/sub-agent-mcp/tiers.toml — see README",
 )
 
 
