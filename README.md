@@ -21,7 +21,7 @@ For ~90% of delegatable tasks, model identity doesn't matter — what matters is
 
 ### When native `Task` is the right call instead
 
-- Tasks that need access to your other MCP servers (Confluence, Jira, Amplitude, …) — sub-agents here only see opencode's built-in tools.
+- Tasks that need access to your other MCP servers (Confluence, Jira, analytics, …) — sub-agents here only see opencode's built-in tools.
 - Quick code-exploration where streaming output back into your context is *desirable* (you want to follow the agent's reasoning).
 - Anything where the sub-agent's output is small enough that token-budget isn't a concern.
 
@@ -47,9 +47,40 @@ Both have valid places — pick by whether you want isolation (here) or context 
    final result text returned to main agent
 ```
 
+**File-scope defaults:** `SUBAGENT_DEFAULT_READ_DIR` and `SUBAGENT_DEFAULT_WRITE_DIR`,
+when non-empty, are inherited even when the caller supplies only `context_files` or a
+text prompt. For explicit opt-in access, leave both empty/unset and pass the relevant
+paths per call. Check returned `meta.read_dir`, `meta.write_dir` and `meta.context_files`;
+omitting arguments alone does not prove a text-only job on an installation with defaults.
+Any standing review authorization is installation-specific and lives outside this repo.
+This scopes tools, not authorization to send data: the calling agent must establish the
+review purpose, destination and permitted context separately.
+
 Each spawn is independent (parallel-safe). Long jobs can detach: `run_subagent` returns `status: "running"` after a timeout but the job keeps writing; you collect later via `check_subagent(task_id)`.
 
 **Timeouts** (`run_subagent`, seit 2026-07-28): normal **600 s**, mit `long=True` **1200 s**; der detachte Sub wird unabhängig davon nach **1800 s** hart gekillt (`runner.py: DEFAULT_KILL_AFTER_SECONDS`). Der Timeout ist als *Fehler*grenze gedacht, nicht als Normallaufzeit — deshalb großzügig. ⚠️ Es gibt **keinen Callback**: wer seinen Turn beendet, während ein Sub noch läuft, verliert das Ergebnis faktisch (es liegt in `sub-results/`, aber niemand liest es). Auspollen oder die `task_id` explizit weiterreichen.
+
+## Reviews without repeated approvals
+
+`run_review(task, tier="fable")` sends only the supplied text to the tier's configured
+provider. It has **no agent runtime**: no file attachments, implicit instructions,
+filesystem, shell, web, MCP tools or delegation. It uses the existing `tiers.toml`
+model mapping and `~/.config/opencode/opencode.json` provider options/credentials;
+Anthropic Messages, OpenAI Responses and OpenAI-compatible Chat Completions are supported.
+The configured base URL must be HTTPS; redirects are refused. No arbitrary model,
+endpoint or file-path argument is exposed. Models can change within configured tiers.
+
+Limits: 64 KiB input, 8192 output tokens, 2 MiB response, two concurrent requests per
+MCP process, 180-second socket timeout. Requests are synchronous and non-streaming;
+there is no background task to collect. Transport/configuration/incomplete responses
+return `status: failed`, never a review verdict. Successful results include the requested
+model, provider endpoint and provider-reported `response_model`. A refusal/missing
+context still needs the main agent's judgment. Do not include credentials or unrelated
+material; this tool does not decide which content the user authorized sharing.
+
+If your host auto-approves `run_review` calls, scope that exemption to this tool and
+to the exact server command you expect; the other sub-agent tools should keep their
+normal approval flow.
 
 ## Quick start (60 seconds)
 
@@ -208,6 +239,7 @@ Three tiers, picked to cover **the only model selections you should normally nee
 |---|---|---|
 | `"default"` | The primary workhorse | Most work; also what a call without `tier` gets. |
 | `"sol"` | OpenAI's flagship | Strong agentic/tool work. |
+| `"astra"` | OpenAI's top model | Critical reviews where the strongest non-Claude voice matters; `sol` stays the everyday workhorse. |
 | `"fable"` | A Claude model | Cross-checking a run that is NOT Claude (e.g. a Codex/Sol run asking for a review). |
 | `"kimi"` | A third voice | Neither Anthropic nor OpenAI — a genuinely independent read. |
 
@@ -227,7 +259,7 @@ yours to define. Pick a tier for a different model, not for a cheaper one.
 Spawn a sub-agent and return immediately with a `task_id`. Sub-agent runs detached in the background.
 
 - `task` (required): the prompt
-- `tier`: `"default"` | `"sol"` | `"fable"` | `"kimi"`. Defaults to `"default"`.
+- `tier`: `"default"` | `"sol"` | `"astra"` | `"fable"` | `"kimi"`. Defaults to `"default"`.
 - `read_dir`: absolute path the sub-agent may read recursively (under `SUBAGENT_READ_ROOTS`)
 - `write_dir`: absolute path the sub-agent may write to (under `SUBAGENT_WRITE_ROOTS`)
 - `context_files`: list of absolute file paths attached as context (each under allowed roots)
