@@ -14,7 +14,7 @@ from mcp.server.fastmcp import FastMCP
 
 from . import results, runner, validators
 
-Tier = Literal["default", "sol", "fable", "kimi"]
+Tier = Literal["default", "sol", "astra", "fable", "kimi"]
 
 
 def _load_env_files() -> None:
@@ -59,16 +59,13 @@ _load_env_files()
 # bigger research/multi-step. The detached sub-agent is still bounded by the
 # hardcoded kill_at deadline (1800s / 30 min) regardless — see runner.py.
 #
-# 2026-07-28 (Ben): von 120/600 auf 600/1200 angehoben. Grund: der Rückgabewert
-# bei Timeout ("läuft noch, hol es später ab") wurde in der Praxis NIE abgeholt —
-# der aufrufende Run endete vorher und das fertige Ergebnis verrottete ungelesen
-# in sub-results/ (36 solcher Waisen gezählt). Warten ist das Gewollte: Board-Runs
-# laufen ohnehin 5-10 min und werden erst nach 15 min OHNE offenes Werkzeug als
-# Stillstand gekillt (todo-board/gc_runner.py IDLE_TIMEOUT), Gesamtnotbremse 60 min.
-# Der Timeout bleibt trotzdem als Bremse für einen HÄNGENDEN Sub — er ist die
-# Fehlergrenze, nicht die Normallaufzeit.
-RUN_SUBAGENT_TIMEOUT_DEFAULT = 600  # 10 min — normale Subs dürfen wirklich arbeiten
-RUN_SUBAGENT_TIMEOUT_LONG = 1200  # 20 min — long=True; bleibt unter kill_at (30 min)
+# Raised from 120/600 to 600/1200: a timeout result ("still running, collect it
+# later") was in practice almost never collected — the calling agent finished first
+# and the finished result sat unread in sub-results/. Waiting is the intended
+# behaviour; the timeout remains a guard against a HUNG sub-agent, not the normal
+# runtime.
+RUN_SUBAGENT_TIMEOUT_DEFAULT = 600  # 10 min — normal sub-agents get room to work
+RUN_SUBAGENT_TIMEOUT_LONG = 1200  # 20 min — long=True; stays below kill_at (30 min)
 
 mcp = FastMCP("sub-agent")
 
@@ -101,6 +98,8 @@ def spawn_subagent(
       - tier="default" → the primary workhorse (same model as one of the named
             tiers). Use it when you just need work done.
       - tier="sol"     → OpenAI's flagship. Strong agentic/tool use.
+      - tier="astra"   → OpenAI's top model. The strongest non-Claude reviewer;
+            use it for critical reviews, "sol" for everyday work.
       - tier="fable"   → a Claude model. The reviewer of choice when the main
             run is NOT Claude (e.g. a Codex/Sol run that wants a cross-check).
       - tier="kimi"    → a third voice, neither Anthropic nor OpenAI.
@@ -115,7 +114,7 @@ def spawn_subagent(
 
     Args:
         task: The prompt for the sub-agent (required).
-        tier: "default" | "sol" | "fable" | "kimi". Defaults to "default".
+        tier: "default" | "sol" | "astra" | "fable" | "kimi". Defaults to "default".
         read_dir: Optional. Directory the sub-agent may read.
         write_dir: Optional. Directory the sub-agent may write.
         context_files: Optional. Specific files to attach + grant read access.
@@ -268,7 +267,7 @@ def run_subagent(
     + check_subagent instead.
 
     MODEL SELECTION — use `tier`, not `model`. See spawn_subagent docstring for
-    the tested tiers ("default" / "sol" / "fable" / "kimi") and why you should
+    the tested tiers ("default" / "sol" / "astra" / "fable" / "kimi") and why you should
     almost never override via `model`.
 
     ⚠️ BLOCKING blocks YOU: while this waits, your own turn does nothing else.
@@ -333,13 +332,28 @@ def run_subagent(
 
 
 @mcp.tool()
+def run_review(task: str, tier: Tier = "fable") -> dict:
+    """Review supplied text through the configured provider, with NO agent tools.
+
+    For pre-authorized reviews/second opinions: include focused material inline.
+    No files, shell, web, MCP, skills, plugins or sub-agents can be accessed.
+    Only configured tiers are accepted; the caller cannot select an endpoint or
+    grant file access. Exclude credentials and unrelated material from task.
+    Returns status, review text and actual model/provider metadata synchronously.
+    General research needing tools must use run_subagent instead.
+    """
+    from . import review
+    return review.run(task, tier)
+
+
+@mcp.tool()
 def list_models() -> list[dict]:
     """DIAGNOSTICS ONLY. List opencode models the local install knows about.
 
     Do NOT use this to pick a model for spawn_subagent / run_subagent — most
     listed models are untested through this MCP, broken via adapter quirks, or
     have flaky availability per provider. Use the `tier` parameter instead
-    ("default" | "sol" | "fable" | "kimi"). This tool exists for debugging provider
+    ("default" | "sol" | "astra" | "fable" | "kimi"). This tool exists for debugging provider
     config and verifying that opencode sees the expected providers.
 
     Returns each as {provider, model, free}. `free` is heuristic: True if the
